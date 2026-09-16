@@ -3950,13 +3950,6 @@ stop_repack_decoding_worker(void)
 	 */
 	ConditionVariableCancelSleep();
 
-	/* If we have allocated a shared memory segment, detach it. */
-	if (decoding_worker->seg != NULL)
-	{
-		dsm_detach(decoding_worker->seg);
-		decoding_worker->seg = NULL;
-	}
-
 	/*
 	 * We can't finish the REPACK command until the worker has exited. This
 	 * means, in particular, that we can't respond to interrupts at this
@@ -3974,6 +3967,18 @@ stop_repack_decoding_worker(void)
 			ereport(FATAL,
 					errcode(ERRCODE_ADMIN_SHUTDOWN),
 					errmsg("postmaster exited during REPACK command"));
+	}
+
+	/*
+	 * Now that the worker is gone, detach from the shared memory segment. The
+	 * worker attaches to the shared file set well after it maps the segment,
+	 * so detaching any earlier can delete that file set under a worker that
+	 * is still starting up.
+	 */
+	if (decoding_worker->seg != NULL)
+	{
+		dsm_detach(decoding_worker->seg);
+		decoding_worker->seg = NULL;
 	}
 
 	pfree(decoding_worker);
