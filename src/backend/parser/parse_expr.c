@@ -3710,8 +3710,16 @@ makeJsonConstructorExpr(ParseState *pstate, JsonConstructorType type,
 	{
 		CaseTestExpr *cte = makeNode(CaseTestExpr);
 
-		cte->typeId = returning->format->format_type == JS_FORMAT_JSONB ?
-			JSONBOID : JSONOID;
+		/*
+		 * JSON_SERIALIZE() passes its argument through unchanged, so the
+		 * value to coerce has the argument's type, which can be jsonb even
+		 * though the RETURNING format is always JSON.
+		 */
+		if (type == JSCTOR_JSON_SERIALIZE)
+			cte->typeId = exprType(linitial(args));
+		else
+			cte->typeId = returning->format->format_type == JS_FORMAT_JSONB ?
+				JSONBOID : JSONOID;
 		cte->typeMod = -1;
 		cte->collation = InvalidOid;
 
