@@ -10849,6 +10849,28 @@ Author: Álvaro Herrera <alvherre@alvh.no-ip.org>
       </para>
       </listitem>
 
+<!--
+Author: Peter Eisentraut <peter@eisentraut.org>
+2024-12-02 [086c84b23] Fix error code for referential action RESTRICT
+-->
+
+      <listitem>
+      <para>
+      Use a distinct error code for violations of the <link
+      linkend="sql-createtable-parms-references"><literal>RESTRICT</literal></link>
+      referential action (Peter Eisentraut)
+      <ulink url="&commit_baseurl;086c84b23">&sect;</ulink>
+      </para>
+
+      <para>
+      Such violations are now reported with <link
+      linkend="errcodes-appendix"><literal>SQLSTATE</literal></link>
+      <literal>23001</literal> rather than <literal>23503</literal>, and the
+      message text changed as well.  <literal>NO ACTION</literal> violations
+      are unchanged.
+      </para>
+      </listitem>
+
      </itemizedlist>
     </sect4>
 
