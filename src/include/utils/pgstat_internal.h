@@ -536,6 +536,12 @@ typedef struct PgStatShared_Backend
 {
 	PgStatShared_Common header;
 	PgStat_Backend stats;
+
+	/*
+	 * Copy of stats.pid, kept outside of the area zeroed by a reset so that
+	 * pgstat_backend_reset_timestamp_cb() can restore it.
+	 */
+	int			pid;
 } PgStatShared_Backend;
 
 /*
