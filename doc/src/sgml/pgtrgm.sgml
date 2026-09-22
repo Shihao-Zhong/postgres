@@ -246,8 +246,8 @@
        </para>
        <para>
         Returns <literal>true</literal> if its arguments have a similarity
-        that is greater than the current similarity threshold set by
-        <varname>pg_trgm.similarity_threshold</varname>.
+        that is greater than or equal to the current similarity threshold set
+        by <varname>pg_trgm.similarity_threshold</varname>.
        </para></entry>
       </row>
 
@@ -259,8 +259,9 @@
        <para>
         Returns <literal>true</literal> if the similarity between the trigram
         set in the first argument and a continuous extent of an ordered trigram
-        set in the second argument is greater than the current word similarity
-        threshold set by <varname>pg_trgm.word_similarity_threshold</varname>
+        set in the second argument is greater than or equal to the current word
+        similarity threshold set by
+        <varname>pg_trgm.word_similarity_threshold</varname>
         parameter.
        </para></entry>
       </row>
@@ -284,7 +285,7 @@
         Returns <literal>true</literal> if its second argument has a continuous
         extent of an ordered trigram set that matches word boundaries,
         and its similarity to the trigram set of the first argument is greater
-        than the current strict word similarity threshold set by the
+        than or equal to the current strict word similarity threshold set by the
         <varname>pg_trgm.strict_word_similarity_threshold</varname> parameter.
        </para></entry>
       </row>

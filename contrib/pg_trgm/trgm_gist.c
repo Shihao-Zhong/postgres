@@ -335,8 +335,13 @@ gtrgm_consistent(PG_FUNCTION_ARGS)
 				int32		count = cnt_sml_sign_common(qtrg, GETSIGN(key), siglen);
 				int32		len = ARRNELEM(qtrg);
 
+				/*
+				 * If the query has no trigrams, the similarity is zero (see
+				 * cnt_sml), which qualifies only when the threshold is zero
+				 * too.
+				 */
 				if (len == 0)
-					res = false;
+					res = (nlimit <= 0);
 				else
 					res = (((((float8) count) / ((float8) len))) >= nlimit);
 			}

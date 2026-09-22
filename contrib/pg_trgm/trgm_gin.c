@@ -92,6 +92,21 @@ gin_extract_query_trgm(PG_FUNCTION_ARGS)
 		case SimilarityStrategyNumber:
 		case WordSimilarityStrategyNumber:
 		case StrictWordSimilarityStrategyNumber:
+
+			/*
+			 * With a threshold of zero every string qualifies, even one that
+			 * shares no trigram with the query, so the query's trigrams are
+			 * of no use in narrowing the search.  Request a full index scan
+			 * instead; the consistent functions accept everything in that
+			 * case.
+			 */
+			if (index_strategy_get_limit(strategy) <= 0)
+			{
+				*nentries = 0;
+				*searchMode = GIN_SEARCH_MODE_ALL;
+				PG_RETURN_POINTER(entries);
+			}
+			pg_fallthrough;
 		case EqualStrategyNumber:
 			trg = generate_trgm(VARDATA_ANY(val), VARSIZE_ANY_EXHDR(val));
 			break;
@@ -216,9 +231,16 @@ gin_trgm_consistent(PG_FUNCTION_ARGS)
 			 * just by definition and, consequently, upper bound of
 			 * similarity is just c / len1.
 			 * So, independently on DIVUNION the upper bound formula is the same.
+			 *
+			 * If there are no query trigrams (either the query string has
+			 * none, or gin_extract_query_trgm asked for a full scan because
+			 * the threshold is zero), the similarity is zero, which qualifies
+			 * only when the threshold is zero too.
 			 */
-			res = (nkeys == 0) ? false :
-				(((((float4) ntrue) / ((float4) nkeys))) >= nlimit);
+			if (nkeys == 0)
+				res = (nlimit <= 0);
+			else
+				res = (((((float4) ntrue) / ((float4) nkeys))) >= nlimit);
 			break;
 		case ILikeStrategyNumber:
 #ifndef IGNORECASE
@@ -299,12 +321,14 @@ gin_trgm_triconsistent(PG_FUNCTION_ARGS)
 			}
 
 			/*
-			 * See comment in gin_trgm_consistent() about * upper bound
-			 * formula
+			 * See comments in gin_trgm_consistent() about the upper bound
+			 * formula and the no-query-trigrams case.
 			 */
-			res = (nkeys == 0)
-				? GIN_FALSE : (((((float4) ntrue) / ((float4) nkeys)) >= nlimit)
-							   ? GIN_MAYBE : GIN_FALSE);
+			if (nkeys == 0)
+				res = (nlimit <= 0) ? GIN_MAYBE : GIN_FALSE;
+			else
+				res = (((((float4) ntrue) / ((float4) nkeys)) >= nlimit)
+					   ? GIN_MAYBE : GIN_FALSE);
 			break;
 		case ILikeStrategyNumber:
 #ifndef IGNORECASE
