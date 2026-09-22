@@ -5448,3 +5448,109 @@ SELECT DISTINCT city, similarity(city, 'Warsaw'), show_limit()
  Warsaw |          1 |        0.5
 (1 row)
 
+-- With a threshold of zero every row qualifies, including rows that share
+-- no trigram with the query and queries without any trigrams (bug #19701).
+SELECT set_limit(0);
+ set_limit 
+-----------
+         0
+(1 row)
+
+SET pg_trgm.word_similarity_threshold = 0;
+SET pg_trgm.strict_word_similarity_threshold = 0;
+EXPLAIN (COSTS OFF) SELECT count(*) FROM restaurants WHERE city % 'xyz';
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on restaurants
+         Recheck Cond: (city % 'xyz'::text)
+         ->  Bitmap Index Scan on restaurants_city_idx
+               Index Cond: (city % 'xyz'::text)
+(5 rows)
+
+SELECT count(*) FROM restaurants WHERE city % 'xyz';
+ count 
+-------
+ 20000
+(1 row)
+
+SELECT count(*) FROM restaurants WHERE city % '';
+ count 
+-------
+ 20000
+(1 row)
+
+SELECT count(*) FROM restaurants WHERE 'xyz' <% city;
+ count 
+-------
+ 20000
+(1 row)
+
+SELECT count(*) FROM restaurants WHERE '' <% city;
+ count 
+-------
+ 20000
+(1 row)
+
+SELECT count(*) FROM restaurants WHERE 'xyz' <<% city;
+ count 
+-------
+ 20000
+(1 row)
+
+SELECT count(*) FROM restaurants WHERE '' <<% city;
+ count 
+-------
+ 20000
+(1 row)
+
+DROP INDEX restaurants_city_idx;
+CREATE INDEX restaurants_city_gin ON restaurants USING gin(city gin_trgm_ops);
+EXPLAIN (COSTS OFF) SELECT count(*) FROM restaurants WHERE city % 'xyz';
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Aggregate
+   ->  Bitmap Heap Scan on restaurants
+         Recheck Cond: (city % 'xyz'::text)
+         ->  Bitmap Index Scan on restaurants_city_gin
+               Index Cond: (city % 'xyz'::text)
+(5 rows)
+
+SELECT count(*) FROM restaurants WHERE city % 'xyz';
+ count 
+-------
+ 20000
+(1 row)
+
+SELECT count(*) FROM restaurants WHERE city % '';
+ count 
+-------
+ 20000
+(1 row)
+
+SELECT count(*) FROM restaurants WHERE 'xyz' <% city;
+ count 
+-------
+ 20000
+(1 row)
+
+SELECT count(*) FROM restaurants WHERE '' <% city;
+ count 
+-------
+ 20000
+(1 row)
+
+SELECT count(*) FROM restaurants WHERE 'xyz' <<% city;
+ count 
+-------
+ 20000
+(1 row)
+
+SELECT count(*) FROM restaurants WHERE '' <<% city;
+ count 
+-------
+ 20000
+(1 row)
+
+RESET pg_trgm.word_similarity_threshold;
+RESET pg_trgm.strict_word_similarity_threshold;
