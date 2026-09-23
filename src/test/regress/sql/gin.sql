@@ -172,6 +172,63 @@ reset enable_bitmapscan;
 
 drop table t_gin_test_tbl;
 
+-- Test pending list scans with scan keys that have many entries.  Those
+-- sort the entries and look up the tuples of each row in them.
+create temp table t_gin_test_tbl(id int, i int4[], j int4[]);
+create index t_gin_test_tbl_i_j_idx on t_gin_test_tbl using gin (i, j)
+  with (fastupdate = on, gin_pending_list_limit = 4096);
+insert into t_gin_test_tbl
+  select g, array[g, g + 1000], array[g % 3] from generate_series(1, 100) g;
+-- a row with enough entries to span two pending list pages
+insert into t_gin_test_tbl
+  values (200, array(select generate_series(1, 600)), '{7}');
+-- a row matching part of "i @> 2001..2100" but not "j && {1}", followed by
+-- a row with the rest of it
+insert into t_gin_test_tbl
+  values (301, array(select generate_series(2001, 2050)) ||
+               array(select generate_series(3001, 3500)), '{9999}'),
+         (302, array(select generate_series(2051, 2100)), '{1}'),
+         (400, '{}', '{1}');
+
+set enable_seqscan = off;
+explain (costs off)
+select count(*) from t_gin_test_tbl where i && array(select generate_series(1001, 1100));
+
+-- run the queries against the pending list, then against the main index
+select count(*) from t_gin_test_tbl where i && array(select generate_series(1001, 1100));
+select count(*) from t_gin_test_tbl where i && array(select generate_series(1001, 1100)) and j && '{0}';
+select count(*) from t_gin_test_tbl where j @> array_fill(0, array[100]);
+select id from t_gin_test_tbl where i @> array(select generate_series(2001, 2100)) and j && '{1}';
+select count(*) from t_gin_test_tbl where i <@ array(select generate_series(1, 2000));
+select gin_clean_pending_list('t_gin_test_tbl_i_j_idx') > 0 as flushed;
+select count(*) from t_gin_test_tbl where i && array(select generate_series(1001, 1100));
+select count(*) from t_gin_test_tbl where i && array(select generate_series(1001, 1100)) and j && '{0}';
+select count(*) from t_gin_test_tbl where j @> array_fill(0, array[100]);
+select id from t_gin_test_tbl where i @> array(select generate_series(2001, 2100)) and j && '{1}';
+select count(*) from t_gin_test_tbl where i <@ array(select generate_series(1, 2000));
+
+drop table t_gin_test_tbl;
+
+-- same with partial-match and GIN_CAT_EMPTY_QUERY entries, which are
+-- still checked one by one
+create temp table t_gin_test_tbl(id int, v tsvector);
+create index t_gin_test_tbl_v_idx on t_gin_test_tbl using gin (v)
+  with (fastupdate = on, gin_pending_list_limit = 4096);
+insert into t_gin_test_tbl
+  select g, array_to_tsvector(array['a' || g, 'b' || g]) from generate_series(1, 100) g;
+select count(*) from t_gin_test_tbl
+  where v @@ (select string_agg('b' || g, ' | ') || ' | a1:*' from generate_series(1001, 1100) g)::tsquery;
+select count(*) from t_gin_test_tbl
+  where v @@ (select '!(' || string_agg('b' || g, ' | ') || ')' from generate_series(1, 90) g)::tsquery;
+select gin_clean_pending_list('t_gin_test_tbl_v_idx') > 0 as flushed;
+select count(*) from t_gin_test_tbl
+  where v @@ (select string_agg('b' || g, ' | ') || ' | a1:*' from generate_series(1001, 1100) g)::tsquery;
+select count(*) from t_gin_test_tbl
+  where v @@ (select '!(' || string_agg('b' || g, ' | ') || ')' from generate_series(1, 90) g)::tsquery;
+
+reset enable_seqscan;
+drop table t_gin_test_tbl;
+
 -- test an unlogged table, mostly to get coverage of ginbuildempty
 create unlogged table t_gin_test_tbl(i int4[], j int4[]);
 create index on t_gin_test_tbl using gin (i, j);
