@@ -719,6 +719,7 @@ static ObjectAddress ATExecSetCompression(Relation rel,
 										  const char *column, Node *newValue, LOCKMODE lockmode);
 
 static void index_copy_data(Relation rel, RelFileLocator newrlocator);
+static void index_copy_to_new_relfilenumber(Oid indexOid, LOCKMODE lockmode);
 static const char *storage_name(char c);
 
 static void RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid,
@@ -17523,6 +17524,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	RelFileNumber newrelfilenumber;
 	RelFileLocator newrlocator;
 	List	   *reltoastidxids = NIL;
+	List	   *relidxids = NIL;
 	ListCell   *lc;
 
 	/*
@@ -17548,6 +17550,11 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 		reltoastidxids = RelationGetIndexList(toastRel);
 		relation_close(toastRel, lockmode);
 	}
+
+	/* Fetch the list of the table's own indexes, see below */
+	if (rel->rd_rel->relkind == RELKIND_RELATION ||
+		rel->rd_rel->relkind == RELKIND_MATVIEW)
+		relidxids = RelationGetIndexList(rel);
 
 	/*
 	 * Relfilenumbers are not unique in databases across tablespaces, so we
@@ -17597,8 +17604,60 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	foreach(lc, reltoastidxids)
 		ATExecSetTableSpace(lfirst_oid(lc), newTableSpace, lockmode);
 
+	/*
+	 * The table's own indexes stay in their tablespaces, but they need new
+	 * relfilenumbers too.  If this (sub)transaction rolls back, the table's
+	 * new storage is discarded along with any rows inserted into it later in
+	 * the transaction.  Index entries for those rows must be discarded too,
+	 * or they would point to heap TIDs that are free again in the old
+	 * storage, and later be taken to point to unrelated rows.
+	 */
+	foreach(lc, relidxids)
+		index_copy_to_new_relfilenumber(lfirst_oid(lc), lockmode);
+
 	/* Clean up */
 	list_free(reltoastidxids);
+	list_free(relidxids);
+}
+
+/*
+ * Give an index a new relfilenumber in the tablespace it is already in, and
+ * copy its contents there.
+ */
+static void
+index_copy_to_new_relfilenumber(Oid indexOid, LOCKMODE lockmode)
+{
+	Relation	rel;
+	Relation	pg_class;
+	HeapTuple	tuple;
+	ItemPointerData otid;
+	RelFileLocator newrlocator;
+
+	rel = index_open(indexOid, lockmode);
+
+	newrlocator = rel->rd_locator;
+	newrlocator.relNumber = GetNewRelFileNumber(newrlocator.spcOid, NULL,
+												rel->rd_rel->relpersistence);
+	index_copy_data(rel, newrlocator);
+
+	/* Update the pg_class row */
+	pg_class = table_open(RelationRelationId, RowExclusiveLock);
+	tuple = SearchSysCacheLockedCopy1(RELOID, ObjectIdGetDatum(indexOid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u", indexOid);
+	otid = tuple->t_self;
+	((Form_pg_class) GETSTRUCT(tuple))->relfilenode = newrlocator.relNumber;
+	CatalogTupleUpdate(pg_class, &otid, tuple);
+	UnlockTuple(pg_class, &otid, InplaceUpdateTupleLock);
+	heap_freetuple(tuple);
+	table_close(pg_class, RowExclusiveLock);
+
+	RelationAssumeNewRelfilelocator(rel);
+
+	index_close(rel, NoLock);
+
+	/* Make sure the relfilenumber change is visible */
+	CommandCounterIncrement();
 }
 
 /*
