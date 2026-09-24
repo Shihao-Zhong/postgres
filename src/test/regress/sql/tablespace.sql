@@ -108,6 +108,27 @@ SELECT relfilenode = :toast_filenode as toast_same FROM pg_class
              c.relname = 'regress_tblspace_test_tbl');
 DROP TABLE regress_tblspace_test_tbl;
 
+-- Rolling back SET TABLESPACE must also roll back the index entries made
+-- after it.  The row inserted after the rollback reuses the heap TID of the
+-- rolled back row, so a leftover index entry would make the last insert fail
+-- with a unique violation.
+CREATE TABLE regress_tblspace_test_tbl (num1 int);
+CREATE UNIQUE INDEX regress_tblspace_test_tbl_idx ON regress_tblspace_test_tbl (num1);
+BEGIN;
+ALTER TABLE regress_tblspace_test_tbl SET TABLESPACE regress_tblspace;
+INSERT INTO regress_tblspace_test_tbl VALUES (1);
+ROLLBACK;
+BEGIN;
+SAVEPOINT sp;
+ALTER TABLE regress_tblspace_test_tbl SET TABLESPACE regress_tblspace;
+INSERT INTO regress_tblspace_test_tbl VALUES (2);
+ROLLBACK TO SAVEPOINT sp;
+COMMIT;
+INSERT INTO regress_tblspace_test_tbl VALUES (3), (4);
+INSERT INTO regress_tblspace_test_tbl VALUES (1), (2);
+SELECT ctid, num1 FROM regress_tblspace_test_tbl ORDER BY num1;
+DROP TABLE regress_tblspace_test_tbl;
+
 -- REINDEX (TABLESPACE) with partitions
 -- Create a partition tree and check the set of relations reindexed
 -- with their new tablespace.
