@@ -274,6 +274,18 @@ brin_inclusion_consistent(PG_FUNCTION_ARGS)
 	subtype = key->sk_subtype;
 	query = key->sk_argument;
 	unionval = column->bv_values[INCLUSION_UNION];
+
+	/*
+	 * Likewise if the union does not contain itself.  That happens with a box
+	 * union that has a NaN coordinate, since no box operator is true against
+	 * a NaN.  Any range that ever had a NaN box can have such a union, and
+	 * the operators below would then report that nothing in it matches.
+	 */
+	finfo = inclusion_get_procinfo(bdesc, attno, PROCNUM_CONTAINS, true);
+	if (finfo != NULL &&
+		!DatumGetBool(FunctionCall2Coll(finfo, colloid, unionval, unionval)))
+		PG_RETURN_BOOL(true);
+
 	switch (key->sk_strategy)
 	{
 			/*
