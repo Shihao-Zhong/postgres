@@ -38,7 +38,7 @@
 /* Working state for hashbuild and its callback */
 typedef struct
 {
-	HSpool	   *spool;			/* NULL if not using spooling */
+	HSpool	   *spool;			/* sort state for the index tuples */
 	double		indtuples;		/* # tuples accepted into index */
 	Relation	heapRel;		/* heap relation descriptor */
 } HashBuildState;
@@ -139,7 +139,6 @@ hashbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	double		reltuples;
 	double		allvisfrac;
 	uint32		num_buckets;
-	Size		sort_threshold;
 	HashBuildState buildstate;
 
 	/*
@@ -157,33 +156,17 @@ hashbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	num_buckets = _hash_init(index, reltuples, MAIN_FORKNUM);
 
 	/*
-	 * If we just insert the tuples into the index in scan order, then
-	 * (assuming their hash codes are pretty random) there will be no locality
-	 * of access to the index, and if the index is bigger than available RAM
-	 * then we'll thrash horribly.  To prevent that scenario, we can sort the
-	 * tuples by (expected) bucket number.  However, such a sort is useless
-	 * overhead when the index does fit in RAM.  We choose to sort if the
-	 * initial index size exceeds maintenance_work_mem, or the number of
-	 * buffers usable for the index, whichever is less.  (Limiting by the
-	 * number of buffers should reduce thrashing between PG buffers and kernel
-	 * buffers, which seems useful even if no physical I/O results.  Limiting
-	 * by maintenance_work_mem is useful to allow easy testing of the sort
-	 * code path, and may be useful to DBAs as an additional control knob.)
-	 *
-	 * NOTE: this test will need adjustment if a bucket is ever different from
-	 * one page.  Also, "initial index size" accounting does not include the
-	 * metapage, nor the first bitmap page.
+	 * If we just inserted the tuples into the index in scan order, then
+	 * (assuming their hash codes are pretty random) there would be no
+	 * locality of access to the index.  Once the index is bigger than the CPU
+	 * caches, each insertion would then touch a cold page, and if the index
+	 * is bigger than available RAM we'd thrash horribly.  So we sort the
+	 * tuples by (expected) bucket number, and then by hash code, which also
+	 * lets _hash_doinsert() append each tuple to its page instead of
+	 * searching for its position.  Only for very small indexes does the sort
+	 * cost more than it saves, and then only slightly, so we always sort.
 	 */
-	sort_threshold = (maintenance_work_mem * (Size) 1024) / BLCKSZ;
-	if (index->rd_rel->relpersistence != RELPERSISTENCE_TEMP)
-		sort_threshold = Min(sort_threshold, NBuffers);
-	else
-		sort_threshold = Min(sort_threshold, NLocBuffer);
-
-	if (num_buckets >= sort_threshold)
-		buildstate.spool = _h_spoolinit(heap, index, num_buckets);
-	else
-		buildstate.spool = NULL;
+	buildstate.spool = _h_spoolinit(heap, index, num_buckets);
 
 	/* prepare to build the index */
 	buildstate.indtuples = 0;
@@ -196,12 +179,9 @@ hashbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_TUPLES_TOTAL,
 								 buildstate.indtuples);
 
-	if (buildstate.spool)
-	{
-		/* sort the tuples and insert them into the index */
-		_h_indexbuild(buildstate.spool, buildstate.heapRel);
-		_h_spooldestroy(buildstate.spool);
-	}
+	/* sort the tuples and insert them into the index */
+	_h_indexbuild(buildstate.spool, buildstate.heapRel);
+	_h_spooldestroy(buildstate.spool);
 
 	/*
 	 * Return statistics
@@ -237,7 +217,6 @@ hashbuildCallback(Relation index,
 	HashBuildState *buildstate = (HashBuildState *) state;
 	Datum		index_values[1];
 	bool		index_isnull[1];
-	IndexTuple	itup;
 
 	/* convert data to a hash key; on failure, do not insert anything */
 	if (!_hash_convert_tuple(index,
@@ -245,18 +224,8 @@ hashbuildCallback(Relation index,
 							 index_values, index_isnull))
 		return;
 
-	/* Either spool the tuple for sorting, or just put it into the index */
-	if (buildstate->spool)
-		_h_spool(buildstate->spool, tid, index_values, index_isnull);
-	else
-	{
-		/* form an index tuple and point it at the heap tuple */
-		itup = index_form_tuple(RelationGetDescr(index),
-								index_values, index_isnull);
-		itup->t_tid = *tid;
-		_hash_doinsert(index, itup, buildstate->heapRel, false);
-		pfree(itup);
-	}
+	/* spool the tuple for sorting */
+	_h_spool(buildstate->spool, tid, index_values, index_isnull);
 
 	buildstate->indtuples += 1;
 }

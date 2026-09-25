@@ -369,9 +369,8 @@ DROP TABLE unlogged_hash_table;
 
 -- CREATE INDEX hash_ovfl_index ON hash_ovfl_heap USING hash (x int4_ops);
 
--- Test hash index build tuplesorting.  Force hash tuplesort using low
--- maintenance_work_mem setting and fillfactor:
-SET maintenance_work_mem = '1MB';
+-- Test hash index build tuplesorting, with a low fillfactor so that the index
+-- has many buckets:
 CREATE INDEX hash_tuplesort_idx ON tenk1 USING hash (stringu1 name_ops) WITH (fillfactor = 10);
 EXPLAIN (COSTS OFF)
 SELECT count(*) FROM tenk1 WHERE stringu1 = 'TVAAAA';
@@ -383,7 +382,6 @@ EXPLAIN (COSTS OFF)
 SELECT COUNT(*) FROM tenk1 WHERE stringu1 = 'TVAAAA' OR  stringu1 = 'TVAAAB';
 RESET enable_seqscan;
 DROP INDEX hash_tuplesort_idx;
-RESET maintenance_work_mem;
 
 
 --

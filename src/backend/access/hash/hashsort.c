@@ -3,9 +3,10 @@
  * hashsort.c
  *		Sort tuples for insertion into a new hash index.
  *
- * When building a very large hash index, we pre-sort the tuples by bucket
- * number to improve locality of access to the index, and thereby avoid
- * thrashing.  We use tuplesort.c to sort the given index tuples into order.
+ * When building a hash index, we pre-sort the tuples by bucket number and
+ * then hash code, to improve locality of access to the index and to let each
+ * tuple be appended to its page.  We use tuplesort.c to sort the given index
+ * tuples into order.
  *
  * Note: if the number of rows in the table has been underestimated,
  * bucket splits may occur during the index build.  In that case we'd
