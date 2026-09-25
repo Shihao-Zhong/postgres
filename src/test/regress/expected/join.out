@@ -7766,19 +7766,21 @@ select d.* from d left join
   (select distinct on (id) id, generate_series(1, 2) as g from b order by id) s
   on d.a = s.id
   order by 1, 2;
-                              QUERY PLAN                               
------------------------------------------------------------------------
- Sort
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Incremental Sort
    Sort Key: d.a, d.b
-   ->  Hash Left Join
-         Hash Cond: (d.a = s.id)
-         ->  Seq Scan on d
-         ->  Hash
-               ->  Subquery Scan on s
-                     ->  ProjectSet
-                           ->  Unique
-                                 ->  Index Only Scan using b_pkey on b
-(10 rows)
+   Presorted Key: d.a
+   ->  Merge Left Join
+         Merge Cond: (d.a = b.id)
+         ->  Sort
+               Sort Key: d.a
+               ->  Seq Scan on d
+         ->  Materialize
+               ->  ProjectSet
+                     ->  Unique
+                           ->  Index Only Scan using b_pkey on b
+(12 rows)
 
 select d.* from d left join
   (select distinct on (id) id, generate_series(1, 2) as g from b order by id) s

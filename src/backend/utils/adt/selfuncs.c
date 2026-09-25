@@ -246,7 +246,8 @@ static Node *strip_all_phvs_mutator(Node *node, void *context);
 static void examine_simple_variable(PlannerInfo *root, Var *var,
 									VariableStatData *vardata);
 static void adjust_statstuple_for_grouping(PlannerInfo *subroot, Var *var,
-										   VariableStatData *vardata);
+										   VariableStatData *vardata,
+										   bool single_key);
 static void examine_indexcol_variable(PlannerInfo *root, IndexOptInfo *index,
 									  int indexcol, VariableStatData *vardata);
 static bool get_variable_range(PlannerInfo *root, VariableStatData *vardata,
@@ -6111,6 +6112,7 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 		List	   *subtlist;
 		TargetEntry *ste;
 		bool		have_grouping = false;
+		bool		single_key = false;
 
 		/*
 		 * Punt if it's a whole-row var rather than a plain column reference.
@@ -6227,7 +6229,11 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 		 * If subquery uses DISTINCT, we can't make full use of stats for the
 		 * variable ... but, if it's the only DISTINCT column, we are entitled
 		 * to consider it unique.  We do the test this way so that it works
-		 * for cases involving DISTINCT ON.
+		 * for cases involving DISTINCT ON.  However, with DISTINCT ON the
+		 * planner may postpone tlist SRFs until after the Unique step, which
+		 * can produce duplicates of the DISTINCT ON column; so, as in
+		 * query_is_distinct_for(), don't consider it unique if there are any
+		 * tlist SRFs.
 		 *
 		 * If the target is a DISTINCT key that is a simple Var, we can still
 		 * obtain a useful stadistinct from the base table, though the
@@ -6243,13 +6249,24 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 				have_grouping = true;
 
 				if (list_length(subquery->distinctClause) == 1)
-					vardata->isunique = true;
+				{
+					single_key = true;
+					if (!(subquery->hasTargetSRFs && subquery->hasDistinctOn))
+						vardata->isunique = true;
+				}
 			}
 			else
 				return;
 		}
 
-		/* The same idea as with DISTINCT clause works for a GROUP-BY too */
+		/*
+		 * The same idea as with DISTINCT clause works for a GROUP-BY too,
+		 * except that tlist SRFs that are not grouping columns are evaluated
+		 * after grouping and so can produce duplicates of the grouping
+		 * column.  As in query_is_distinct_for(), we don't bother to check
+		 * for that precisely, but just give up on uniqueness if there are any
+		 * tlist SRFs.
+		 */
 		if (subquery->groupClause)
 		{
 			if (targetIsInSortList(ste, InvalidOid, subquery->groupClause))
@@ -6257,7 +6274,11 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 				have_grouping = true;
 
 				if (list_length(subquery->groupClause) == 1)
-					vardata->isunique = true;
+				{
+					single_key = true;
+					if (!subquery->hasTargetSRFs)
+						vardata->isunique = true;
+				}
 			}
 			else if (!have_grouping)
 				return;
@@ -6298,7 +6319,8 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 			 * obtained stats tuple for the grouped context.
 			 */
 			if (have_grouping)
-				adjust_statstuple_for_grouping(subroot, var, vardata);
+				adjust_statstuple_for_grouping(subroot, var, vardata,
+											   single_key);
 		}
 	}
 	else
@@ -6324,13 +6346,15 @@ examine_simple_variable(PlannerInfo *root, Var *var,
  * var_eq_const) to fall through to the 1/ndistinct estimate instead.
  *
  * stanullfrac must also be adjusted.  When this column is the only GROUP BY or
- * DISTINCT column, its NULLs are collapsed into one group, so the null
- * fraction is 1/(ndistinct+1) if the base column had NULLs.  With multiple
- * grouping columns a NULL can pair with many combinations of the other keys,
- * so the null fraction depends on their joint distribution, which we don't
- * have.  We approximate it as zero: NULLs collapse far more aggressively than
- * non-NULLs, so the output fraction is well below the base table's, and erring
- * low keeps estimates on the hash-join-favoring side.
+ * DISTINCT column (single_key), its NULLs are collapsed into one group, so the
+ * null fraction is 1/(ndistinct+1) if the base column had NULLs.  This holds
+ * even if tlist SRFs expand the groups afterwards, so single_key is not the
+ * same as vardata->isunique.  With multiple grouping columns a NULL can pair
+ * with many combinations of the other keys, so the null fraction depends on
+ * their joint distribution, which we don't have.  We approximate it as zero:
+ * NULLs collapse far more aggressively than non-NULLs, so the output fraction
+ * is well below the base table's, and erring low keeps estimates on the
+ * hash-join-favoring side.
  *
  * If stadistinct is negative (a fraction of the base table's row count), we
  * convert it to an absolute count, since it would otherwise be misinterpreted
@@ -6338,7 +6362,7 @@ examine_simple_variable(PlannerInfo *root, Var *var,
  */
 static void
 adjust_statstuple_for_grouping(PlannerInfo *subroot, Var *var,
-							   VariableStatData *vardata)
+							   VariableStatData *vardata, bool single_key)
 {
 	HeapTuple	copy;
 	Form_pg_statistic stats;
@@ -6366,7 +6390,7 @@ adjust_statstuple_for_grouping(PlannerInfo *subroot, Var *var,
 		(&stats->stakind1)[k] = 0;
 
 	/* Adjust the null fraction (see comment above). */
-	if (vardata->isunique && stats->stanullfrac > 0.0 && stats->stadistinct > 0)
+	if (single_key && stats->stanullfrac > 0.0 && stats->stadistinct > 0)
 		stats->stanullfrac = 1.0 / (stats->stadistinct + 1.0);
 	else
 		stats->stanullfrac = 0.0;
