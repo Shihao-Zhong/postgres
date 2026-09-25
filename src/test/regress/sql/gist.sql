@@ -272,6 +272,8 @@ select count(*) from gist_nan_point_tbl where p ~= point '(3,3)';
 -- contains strategies, so the exact operator decides, as on the heap
 select count(*) from gist_nan_point_tbl where p <@ polygon '(0,0),(0,100),(100,100),(50,50),(100,0),(0,0)';
 select count(*) from gist_nan_point_tbl where p <@ circle '<(50,50),50>';
+-- a polygon with a NaN vertex has a NaN bounding box, same thing
+select count(*) from gist_nan_point_tbl where p <@ polygon '(0,0),(0,10),(10,10),(10,NaN)';
 reset enable_seqscan;
 reset enable_bitmapscan;
 drop table gist_nan_point_tbl;

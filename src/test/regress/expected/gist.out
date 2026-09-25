@@ -547,6 +547,13 @@ select count(*) from gist_nan_point_tbl where p <@ circle '<(50,50),50>';
   7843
 (1 row)
 
+-- a polygon with a NaN vertex has a NaN bounding box, same thing
+select count(*) from gist_nan_point_tbl where p <@ polygon '(0,0),(0,10),(10,10),(10,NaN)';
+ count 
+-------
+  1015
+(1 row)
+
 reset enable_seqscan;
 reset enable_bitmapscan;
 drop table gist_nan_point_tbl;

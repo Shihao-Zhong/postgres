@@ -1483,10 +1483,12 @@ gist_point_consistent(PG_FUNCTION_ARGS)
 				POLYGON    *query = PG_GETARG_POLYGON_P(1);
 
 				/*
-				 * A NaN point fails the bounding-box prefilter, though the
-				 * exact operator below may still match it, as on the heap.
+				 * A NaN point, or a polygon with a NaN vertex, fails the
+				 * bounding-box prefilter, though the exact operator below may
+				 * still match, as on the heap.
 				 */
 				result = box_has_nan(DatumGetBoxP(entry->key)) ||
+					box_has_nan(&query->boundbox) ||
 					DatumGetBool(DirectFunctionCall5(gist_poly_consistent,
 													 PointerGetDatum(entry),
 													 PolygonPGetDatum(query),
