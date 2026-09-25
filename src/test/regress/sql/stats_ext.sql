@@ -1860,6 +1860,19 @@ SELECT * FROM check_estimated_rows('
     SELECT x FROM grouping_unique t2 GROUP BY x) AS q1
   ON t1.t1 = q1.x;
 ');
+
+-- ... but not if a tlist SRF can produce duplicates after the grouping step
+SELECT * FROM check_estimated_rows('
+  SELECT * FROM generate_series(1, 1) t1 LEFT JOIN (
+    SELECT x, generate_series(1, 10) FROM grouping_unique t2 GROUP BY x) AS q1
+  ON t1.t1 = q1.x;
+');
+SELECT * FROM check_estimated_rows('
+  SELECT * FROM generate_series(1, 1) t1 LEFT JOIN (
+    SELECT DISTINCT ON (x) x, generate_series(1, 10) FROM grouping_unique t2
+    ORDER BY x) AS q1
+  ON t1.t1 = q1.x;
+');
 DROP TABLE grouping_unique;
 
 --
