@@ -297,14 +297,20 @@ heap_xlog_vm_clear(XLogReaderState *record,
 	 * read it. These will either apply an FPI or indicate that we should
 	 * clear the requested bits ourselves.
 	 *
+	 * The VM page can be missing, or all zeros, when redo restarts from a
+	 * point before an already replayed truncation of the VM.  Read it with
+	 * RBM_ZERO_ON_ERROR, like the redo routines that set VM bits, instead of
+	 * reporting an invalid page.  Clearing bits on a zeroed page is a no-op.
+	 *
 	 * Originally, clearing the VM did not register the VM buffers, so since
 	 * registering the VM buffer was a bug fix, we keep a fallback path to
 	 * support replay of WAL generated from before the fix.
 	 */
 	if (XLogRecHasBlockRef(record, wal_vm_block_id))
 	{
-		if (XLogReadBufferForRedo(record, wal_vm_block_id,
-								  &vmbuffer) == BLK_NEEDS_REDO)
+		if (XLogReadBufferForRedoExtended(record, wal_vm_block_id,
+										  RBM_ZERO_ON_ERROR, false,
+										  &vmbuffer) == BLK_NEEDS_REDO)
 		{
 			if (visibilitymap_clear_locked(reln,
 										   heap_blkno, vmbuffer,
@@ -10337,8 +10343,10 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 
 			Assert(xlrec->flags & XLH_UPDATE_NEW_ALL_VISIBLE_CLEARED);
 
-			if (XLogReadBufferForRedo(record, HEAP_UPDATE_BLKREF_VM_NEW,
-									  &vmbuffer_new) == BLK_NEEDS_REDO)
+			/* See heap_xlog_vm_clear() for why we use RBM_ZERO_ON_ERROR */
+			if (XLogReadBufferForRedoExtended(record, HEAP_UPDATE_BLKREF_VM_NEW,
+											  RBM_ZERO_ON_ERROR, false,
+											  &vmbuffer_new) == BLK_NEEDS_REDO)
 			{
 				/*
 				 * If both the old and new heap pages were all-visible and
@@ -10375,8 +10383,9 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 
 			Assert(xlrec->flags & XLH_UPDATE_OLD_ALL_VISIBLE_CLEARED);
 
-			if (XLogReadBufferForRedo(record, HEAP_UPDATE_BLKREF_VM_OLD, &vmbuffer_old) ==
-				BLK_NEEDS_REDO)
+			if (XLogReadBufferForRedoExtended(record, HEAP_UPDATE_BLKREF_VM_OLD,
+											  RBM_ZERO_ON_ERROR, false,
+											  &vmbuffer_old) == BLK_NEEDS_REDO)
 			{
 				if (visibilitymap_clear_locked(reln, oldblk, vmbuffer_old,
 											   VISIBILITYMAP_VALID_BITS))
