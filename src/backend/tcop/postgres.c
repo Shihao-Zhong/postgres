@@ -5407,4 +5407,14 @@ disable_statement_timeout(void)
 {
 	if (get_timeout_active(STATEMENT_TIMEOUT))
 		disable_timeout(STATEMENT_TIMEOUT, false);
+	else
+	{
+		/*
+		 * The timeout may have fired after the statement's last
+		 * CHECK_FOR_INTERRUPTS(), for instance while interrupts were held
+		 * during cleanup.  The statement is over, so forget it rather than
+		 * let the next statement report it.
+		 */
+		(void) get_timeout_indicator(STATEMENT_TIMEOUT, true);
+	}
 }
