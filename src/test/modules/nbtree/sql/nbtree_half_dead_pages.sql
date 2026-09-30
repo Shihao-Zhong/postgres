@@ -13,6 +13,7 @@
 set client_min_messages TO 'warning';
 create extension if not exists injection_points;
 create extension if not exists amcheck;
+create extension if not exists pageinspect;
 reset client_min_messages;
 
 -- Wait until all recently-dead tuples on a table become fully dead
@@ -71,5 +72,72 @@ vacuum nbtree_half_dead_pages;
 select * from nbtree_half_dead_pages where id > 99998 and id < 120002;
 select bt_index_parent_check('nbtree_half_dead_pages_id_idx'::regclass, true, true);
 
+--
+-- Test finishing the deletion of a half-dead page whose right sibling is
+-- empty too.
+--
+-- No descent stack is built for a page that is already half-dead, so when
+-- the empty right sibling is deleted in passing, the stack has to be built
+-- for it at that point.  The right sibling is the rightmost child of its
+-- parent, which is why the earlier VACUUM could not delete it.  Once the
+-- half-dead page is gone it is the parent's only child, so both get
+-- deleted.
+--
+-- Use a low fillfactor so that the index has three levels even though the
+-- table is small.
+create table nbtree_half_dead_rightsib(id bigint) with (autovacuum_enabled = off);
+insert into nbtree_half_dead_rightsib select g from generate_series(1, 15000) g;
+create index nbtree_half_dead_rightsib_idx on nbtree_half_dead_rightsib
+  using btree (id) with (fillfactor = 10);
+
+-- Find the pages: A is the leftmost child of the root, R is A's rightmost
+-- child, and P is R's left sibling.
+select level from bt_metap('nbtree_half_dead_rightsib_idx');
+select root from bt_metap('nbtree_half_dead_rightsib_idx') \gset
+select (ctid::text::point)[0]::int as a
+  from bt_page_items('nbtree_half_dead_rightsib_idx', :root) where itemoffset = 1 \gset
+select max(itemoffset) as amax
+  from bt_page_items('nbtree_half_dead_rightsib_idx', :a) \gset
+select (ctid::text::point)[0]::int as r
+  from bt_page_items('nbtree_half_dead_rightsib_idx', :a) where itemoffset = :amax \gset
+select (ctid::text::point)[0]::int as p
+  from bt_page_items('nbtree_half_dead_rightsib_idx', :a) where itemoffset = :amax - 1 \gset
+-- The key ranges of P and R
+select min(t.id) as pmin, max(t.id) as pmax
+  from bt_page_items('nbtree_half_dead_rightsib_idx', :p) i
+  join nbtree_half_dead_rightsib t on t.ctid = i.ctid where i.itemoffset > 1 \gset
+select min(t.id) as rmin, max(t.id) as rmax
+  from bt_page_items('nbtree_half_dead_rightsib_idx', :r) i
+  join nbtree_half_dead_rightsib t on t.ctid = i.ctid where i.itemoffset > 1 \gset
+
+-- Empty all of A's children except P.  VACUUM deletes all of them except R,
+-- the rightmost child of A.
+delete from nbtree_half_dead_rightsib where id < :pmin or id between :rmin and :rmax;
+call wait_prunable();
+vacuum (index_cleanup on) nbtree_half_dead_rightsib;
+-- A has two children left (live_items includes the high key)
+select type, live_items from bt_page_stats('nbtree_half_dead_rightsib_idx', :a);
+-- R is still live, and empty apart from its high key
+select type, live_items from bt_page_stats('nbtree_half_dead_rightsib_idx', :r);
+
+-- Empty P, and interrupt VACUUM after it has marked P half-dead
+delete from nbtree_half_dead_rightsib where id between :pmin and :pmax;
+call wait_prunable();
+SELECT injection_points_attach('nbtree-leave-page-half-dead', 'error');
+vacuum (index_cleanup on) nbtree_half_dead_rightsib;
+SELECT injection_points_detach('nbtree-leave-page-half-dead');
+select type from bt_page_stats('nbtree_half_dead_rightsib_idx', :p);
+select type, live_items from bt_page_stats('nbtree_half_dead_rightsib_idx', :a);
+select bt_index_parent_check('nbtree_half_dead_rightsib_idx'::regclass, true, true);
+
+-- Finish the deletion.  P, R and A should all be deleted now.
+vacuum (index_cleanup on) nbtree_half_dead_rightsib;
+select type from bt_page_stats('nbtree_half_dead_rightsib_idx', :p);
+select type from bt_page_stats('nbtree_half_dead_rightsib_idx', :r);
+select type from bt_page_stats('nbtree_half_dead_rightsib_idx', :a);
+select count(*) from nbtree_half_dead_rightsib where id between :pmin and :rmax;
+select bt_index_parent_check('nbtree_half_dead_rightsib_idx'::regclass, true, true);
+
+drop extension pageinspect;
 drop extension amcheck;
 drop extension injection_points;

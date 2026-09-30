@@ -1,6 +1,6 @@
 # src/test/modules/nbtree/Makefile
 
-EXTRA_INSTALL = src/test/modules/injection_points contrib/amcheck
+EXTRA_INSTALL = src/test/modules/injection_points contrib/amcheck contrib/pageinspect
 
 REGRESS = nbtree_half_dead_pages \
 	nbtree_incomplete_splits
